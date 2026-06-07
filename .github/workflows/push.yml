@@ -57,6 +57,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    # Run if push to some registry is enabled
+    if: |
+      # Run if Docker Hub registry is enabled
+      env.DHCR_ENABLED == 'true' ||
+      # Run if GitHub registry is enabled
+      env.GHCR_ENABLED == 'true' ||
+      # Run if custom registry is enabled
+      env.CUSTOM_CR_ENABLED == 'true'
+
     # Set GITHUB_TOKEN permissions for the job
     permissions:
       contents: read
@@ -108,7 +117,7 @@ jobs:
           set_github_env 'DEPLOY_ENV' "${DEPLOY_ENV}" non-optional non-secret verbose
 
       - name: Set Docker Hub registry credentials
-        if: env.DHCR_ENABLED == 'true' || vars.DHCR_USERNAME != ''
+        if: env.DHCR_ENABLED == 'true'
         env:
           REGISTRY_URL: docker.io
           REGISTRY_USERNAME: ${{ vars.DHCR_USERNAME }}
