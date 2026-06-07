@@ -59,11 +59,8 @@ jobs:
 
     # Run if push to some registry is enabled
     if: |
-      # Run if Docker Hub registry is enabled
       env.DHCR_ENABLED == 'true' ||
-      # Run if GitHub registry is enabled
       env.GHCR_ENABLED == 'true' ||
-      # Run if custom registry is enabled
       env.CUSTOM_CR_ENABLED == 'true'
 
     # Set GITHUB_TOKEN permissions for the job
