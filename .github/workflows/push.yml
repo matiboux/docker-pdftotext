@@ -59,9 +59,9 @@ jobs:
 
     # Run if push to some registry is enabled
     if: |
-      env.DHCR_ENABLED == 'true' ||
-      env.GHCR_ENABLED == 'true' ||
-      env.CUSTOM_CR_ENABLED == 'true'
+      vars.DHCR_ENABLED == 'true' ||
+      vars.GHCR_ENABLED == 'true' ||
+      vars.CUSTOM_CR_ENABLED == 'true'
 
     # Set GITHUB_TOKEN permissions for the job
     permissions:
