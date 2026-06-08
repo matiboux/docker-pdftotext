@@ -30,6 +30,7 @@ RUN apk add --no-cache \
 	fontconfig-dev \
 	freetype-dev \
 	libstdc++ \
+	libjpeg-turbo-dev \
 	ninja
 
 # Build pdftotext utility
@@ -46,7 +47,6 @@ RUN cmake -S . -B build -G Ninja \
 	-DENABLE_BOOST=OFF \
 	-DENABLE_CAIRO=OFF \
 	-DENABLE_CPP=OFF \
-	-DENABLE_DCTDECODER=none \
 	-DENABLE_GLIB=OFF \
 	-DENABLE_GOBJECT_INTROSPECTION=OFF \
 	-DENABLE_GPGME=OFF \
@@ -73,6 +73,7 @@ FROM alpine_upstream AS app_prod
 RUN apk add --no-cache \
 	fontconfig \
 	freetype \
+	libjpeg-turbo \
 	libstdc++
 
 # Copy pdftotext utility from build image
