@@ -55,7 +55,7 @@ jobs:
   push:
     name: Build & Push
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
 
     # Run if push to some registry is enabled
     if: |
