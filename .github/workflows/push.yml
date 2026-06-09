@@ -182,6 +182,19 @@ jobs:
 
           set_github_env 'DEPLOY_ENV' "${DEPLOY_ENV}" non-optional non-secret verbose
 
+      - name: Set PLATFORM_SUFFIX
+        env:
+          BUILD_PLATFORM: ${{ env.BUILD_PLATFORM }}
+        run: |
+          # Set PLATFORM_SUFFIX environment variable
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_env.sh
+
+          PLATFORM_SUFFIX="$(echo "${BUILD_PLATFORM}" | cut -d/ -f2)"
+
+          set_github_env 'PLATFORM_SUFFIX' "${PLATFORM_SUFFIX}" non-optional non-secret verbose
+
       - name: Set Docker Hub registry credentials
         if: env.DHCR_ENABLED == 'true'
         env:
@@ -298,6 +311,7 @@ jobs:
           CUSTOM_CR_ENABLED: ${{ env.CUSTOM_CR_ENABLED }}
           CUSTOM_CR_IMAGES_NAME: ${{ env.CUSTOM_CR_IMAGES_NAME }}
           GITHUB_SHA: ${{ github.sha }}
+          PLATFORM_SUFFIX: ${{ env.PLATFORM_SUFFIX }}
         run: |
           # Set Docker image tags
 
@@ -309,30 +323,30 @@ jobs:
           # Include image tag for Docker Hub registry
           if [ "${DHCR_ENABLED}" = "true" ] && [ -n "${DHCR_IMAGES_NAME}" ]; then
             echo 'Generate Docker Hub image tag (commit SHA)'
-            IMAGE_TAGS="${IMAGE_TAGS},${DHCR_IMAGES_NAME}:${GITHUB_SHA}"
+            IMAGE_TAGS="${IMAGE_TAGS},${DHCR_IMAGES_NAME}:${GITHUB_SHA}-${PLATFORM_SUFFIX}"
             if [ "${DEPLOY_ENV}" = "PROD" ]; then
               echo 'Generate Docker Hub image tag (latest)'
-              IMAGE_TAGS="${IMAGE_TAGS},${DHCR_IMAGES_NAME}:latest"
+              IMAGE_TAGS="${IMAGE_TAGS},${DHCR_IMAGES_NAME}:latest-${PLATFORM_SUFFIX}"
             fi
           fi
 
           # Include image tag for GitHub registry
           if [ "${GHCR_ENABLED}" = "true" ] && [ -n "${GHCR_IMAGES_NAME}" ]; then
             echo 'Generate GitHub registry image tag (commit SHA)'
-            IMAGE_TAGS="${IMAGE_TAGS},${GHCR_IMAGES_NAME}:${GITHUB_SHA}"
+            IMAGE_TAGS="${IMAGE_TAGS},${GHCR_IMAGES_NAME}:${GITHUB_SHA}-${PLATFORM_SUFFIX}"
             if [ "${DEPLOY_ENV}" = "PROD" ]; then
               echo 'Generate GitHub registry image tag (latest)'
-              IMAGE_TAGS="${IMAGE_TAGS},${GHCR_IMAGES_NAME}:latest"
+              IMAGE_TAGS="${IMAGE_TAGS},${GHCR_IMAGES_NAME}:latest-${PLATFORM_SUFFIX}"
             fi
           fi
 
           # Include image tag for custom registry
           if [ "${CUSTOM_CR_ENABLED}" = "true" ] && [ -n "${CUSTOM_CR_IMAGES_NAME}" ]; then
             echo 'Generate custom registry image tag (commit SHA)'
-            IMAGE_TAGS="${IMAGE_TAGS},${CUSTOM_CR_IMAGES_NAME}:${GITHUB_SHA}"
+            IMAGE_TAGS="${IMAGE_TAGS},${CUSTOM_CR_IMAGES_NAME}:${GITHUB_SHA}-${PLATFORM_SUFFIX}"
             if [ "${DEPLOY_ENV}" = "PROD" ]; then
               echo 'Generate custom registry image tag (latest)'
-              IMAGE_TAGS="${IMAGE_TAGS},${CUSTOM_CR_IMAGES_NAME}:latest"
+              IMAGE_TAGS="${IMAGE_TAGS},${CUSTOM_CR_IMAGES_NAME}:latest-${PLATFORM_SUFFIX}"
             fi
           fi
 
@@ -361,7 +375,7 @@ jobs:
           build-args: |
             PORT=8080
             BUILD_CHECK=false
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
