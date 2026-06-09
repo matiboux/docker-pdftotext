@@ -122,6 +122,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
 
+    # Job dependencies
     needs:
       - prepare
 
@@ -379,3 +380,135 @@ jobs:
           push: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Push manifest job
+  push-manifest:
+    name: Push manifest
+
+    # https://github.com/actions/runner-images/blob/main/images/ubuntu-slim/ubuntu-slim-Readme.md
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+
+    # Job dependencies
+    needs:
+      - push
+
+    # Run if push to some registry is enabled
+    if: |
+      vars.DHCR_ENABLED == 'true' ||
+      vars.GHCR_ENABLED == 'true' ||
+      vars.CUSTOM_CR_ENABLED == 'true'
+
+    # Set GITHUB_TOKEN permissions for the job
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+
+      # Initialization steps
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Preparation steps
+
+      - name: Set Docker Hub registry credentials
+        if: env.DHCR_ENABLED == 'true'
+        env:
+          REGISTRY_URL: docker.io
+          REGISTRY_USERNAME: ${{ vars.DHCR_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.DHCR_TOKEN }}
+          REGISTRY_NAMESPACE: ${{ vars.DHCR_USERNAME }}
+          IMAGES_PREFIX: ${{ env.IMAGES_PREFIX }}
+          IMAGES_SUFFIX: ${{ env.IMAGES_SUFFIX }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          REPOSITORY_PATH: ${{ github.repository }}
+        run: |
+          # Set Docker Hub registry credentials
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_env.sh
+          . ./.github/workflows/scripts/set_registry_credentials.sh
+
+          set_registry_credentials \
+            'DHCR_URL' \
+            'DHCR_IMAGES_NAME' \
+            'DHCR_USERNAME' \
+            'DHCR_TOKEN'
+
+      - name: Set GitHub registry credentials
+        if: env.GHCR_ENABLED == 'true'
+        env:
+          REGISTRY_URL: ghcr.io
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_NAMESPACE: ${{ github.repository_owner }}
+          IMAGES_PREFIX: ${{ env.IMAGES_PREFIX }}
+          IMAGES_SUFFIX: ${{ env.IMAGES_SUFFIX }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          REPOSITORY_PATH: ${{ github.repository }}
+        run: |
+          # Set GitHub registry credentials
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_env.sh
+          . ./.github/workflows/scripts/set_registry_credentials.sh
+
+          set_registry_credentials \
+            'GHCR_URL' \
+            'GHCR_IMAGES_NAME' \
+            'GHCR_USERNAME' \
+            'GHCR_TOKEN'
+
+      - name: Set custom registry credentials
+        if: env.CUSTOM_CR_ENABLED == 'true'
+        env:
+          REGISTRY_URL: ${{ vars.CUSTOM_CR_URL }}
+          REGISTRY_USERNAME: ${{ vars.CUSTOM_CR_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.CUSTOM_CR_TOKEN }}
+          REGISTRY_NAMESPACE: ${{ vars.CUSTOM_CR_NAMESPACE }}
+          IMAGES_PREFIX: ${{ env.IMAGES_PREFIX }}
+          IMAGES_SUFFIX: ${{ env.IMAGES_SUFFIX }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          REPOSITORY_PATH: ${{ github.repository }}
+        run: |
+          # Set custom registry credentials
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_env.sh
+          . ./.github/workflows/scripts/set_registry_credentials.sh
+
+          set_registry_credentials \
+            'CUSTOM_CR_URL' \
+            'CUSTOM_CR_IMAGES_NAME' \
+            'CUSTOM_CR_USERNAME' \
+            'CUSTOM_CR_TOKEN'
+
+      # Execution steps
+
+      - name: Login to Docker Hub registry
+        if: env.DHCR_URL
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.DHCR_URL }}
+          username: ${{ env.DHCR_USERNAME }}
+          password: ${{ env.DHCR_TOKEN }}
+
+      - name: Login to GitHub registry
+        if: env.GHCR_URL
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.GHCR_URL }}
+          username: ${{ env.GHCR_USERNAME }}
+          password: ${{ env.GHCR_TOKEN }}
+
+      - name: Login to custom registry
+        if: env.CUSTOM_CR_URL
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.CUSTOM_CR_URL }}
+          username: ${{ env.CUSTOM_CR_USERNAME }}
+          password: ${{ env.CUSTOM_CR_TOKEN }}
+
+      # FIXME
