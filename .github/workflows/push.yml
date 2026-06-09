@@ -13,6 +13,7 @@ name: Push CD
 # - CUSTOM_CR_USERNAME
 # - CUSTOM_CR_NAMESPACE
 # - IMAGES_PREFIX
+# - PUSH_PLATFORMS
 
 # Helper scripts:
 # - ./.github/workflows/scripts/set_github_env.sh
@@ -51,11 +52,78 @@ env:
 
 jobs:
 
+  # Prepare job
+  prepare:
+    name: Prepare build matrix
+
+    # https://github.com/actions/runner-images/blob/main/images/ubuntu-slim/ubuntu-slim-Readme.md
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+
+      # Dependency steps
+
+      - name: Install jq
+        run: |
+          # apt-get install jq
+          sudo apt-get -q update
+          sudo apt-get -qy install --no-install-recommends jq
+
+      # Execution steps
+
+      - name: Build matrix from PUSH_PLATFORMS
+        id: matrix
+        env:
+          PUSH_PLATFORMS: ${{ vars.PUSH_PLATFORMS }}
+        run: |
+          set -euo pipefail
+
+          # Transform list of comma-separated platforms
+          # to job matrix configuration in JSON format.
+          MATRIX_JSON="$(
+            echo "${PUSH_PLATFORMS:-linux/amd64}" \
+            | jq -Rn '
+                input
+                | split(",")
+                | map(gsub("^\\s+|\\s+$"; ""))
+                | map(select(length > 0))
+                | map({
+                    platform: .,
+                    runner: (
+                      if . == "linux/amd64" then "ubuntu-latest"
+                      elif . == "linux/arm64" then "ubuntu-24.04-arm"
+                      else "ubuntu-latest"
+                      end
+                    )
+                  })
+                | {include: .}
+              '
+          )"
+
+          echo "matrix=$MATRIX_JSON" >> "$GITHUB_OUTPUT"
+          echo "matrix<<GITHUB_OUTPUT_EOF" >> "$GITHUB_OUTPUT"
+          echo "${MATRIX_JSON}" >> "$GITHUB_OUTPUT"
+          echo "GITHUB_OUTPUT_EOF" >> "$GITHUB_OUTPUT"
+
   # Build & Push job
   push:
     name: Build & Push
-    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
+    # https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md
+    # https://github.com/actions/partner-runner-images/blob/main/images/arm-ubuntu-24-image.md
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+
+    needs:
+      - prepare
 
     # Run if push to some registry is enabled
     if: |
@@ -73,6 +141,7 @@ jobs:
       IMAGES_SUFFIX: ''
       SERVICE_DIR: .
       BUILD_CONTEXTS: ''
+      BUILD_PLATFORM: ${{ matrix.platform }}
 
     steps:
 
