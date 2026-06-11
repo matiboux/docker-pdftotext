@@ -11,16 +11,19 @@ set_github_output() {
 
 	local var_name="$1"
 	local var_value="$2"
-	local is_verbose="$(if [ -z "$3" ] || [ "$3" = 'true' ]; then echo 'true'; else echo 'false'; fi)"
+	local is_verbose="$(
+		if [ -z "$3" ] || [ "$3" = 'true' ] || [ "$3" = '1' ] || [ "$3" = 'verbose' ];
+		then echo 'true'; else echo 'false'; fi
+	)"
 
 	# Verify var_name is not empty
 	if [ -z "${var_name}" ]; then
-		echo "Error: Variable name is empty" >&2
+		echo 'Error: Variable name is empty' >&2
 		return 1
 	fi
 
 	# Verbose output
-	if [ "${is_verbose}" = "true" ]; then
+	if [ "${is_verbose}" = 'true' ]; then
 		echo "Set ${var_name} to '${var_value}'"
 	fi
 
