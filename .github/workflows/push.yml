@@ -80,6 +80,7 @@ jobs:
         env:
           PUSH_PLATFORMS: ${{ vars.PUSH_PLATFORMS }}
         run: |
+          # Build job matrix from PUSH_PLATFORMS variable
           set -euo pipefail
 
           # Transform list of comma-separated platforms
@@ -87,21 +88,21 @@ jobs:
           MATRIX_JSON="$(
             echo "${PUSH_PLATFORMS:-linux/amd64}" \
             | jq -Rn '
-                input
-                | split(",")
-                | map(gsub("^\\s+|\\s+$"; ""))
-                | map(select(length > 0))
-                | map({
-                    platform: .,
-                    runner: (
-                      if . == "linux/amd64" then "ubuntu-latest"
-                      elif . == "linux/arm64" then "ubuntu-24.04-arm"
-                      else "ubuntu-latest"
-                      end
-                    )
-                  })
-                | {include: .}
-              '
+              input
+              | split("[\\s,]+"; null)
+              | map(gsub("^\\s+|\\s+$"; ""))
+              | map(select(length > 0))
+              | map({
+                platform: .,
+                runner: (
+                  if . == "linux/amd64" then "ubuntu-latest"
+                  elif . == "linux/arm64" then "ubuntu-24.04-arm"
+                  else "ubuntu-latest"
+                  end
+                )
+              })
+              | { include: . }
+            '
           )"
 
           echo "matrix=$MATRIX_JSON" >> "$GITHUB_OUTPUT"
@@ -413,6 +414,36 @@ jobs:
 
       # Preparation steps
 
+      - name: Set DEPLOY_ENV
+        env:
+          GITHUB_REF: ${{ github.ref }}
+          DEPLOY_ENV: ${{ github.event.inputs.deploy_env }}
+        run: |
+          # Set DEPLOY_ENV environment variable
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_env.sh
+
+          if [ -n "${DEPLOY_ENV}" ]; then
+            # Sanitize DEPLOY_ENV value:
+            # - Strip leading & trailing whitespace
+            # - Remove punctuation
+            # - Convert to uppercase
+            # - Replace spaces with underscores
+            DEPLOY_ENV="$(
+              echo "${DEPLOY_ENV}" \
+              | xargs \
+              | tr -d '[:punct:]' \
+              | tr '[:lower:] ' '[:upper:]_'
+            )"
+          elif [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            DEPLOY_ENV="PROD"
+          else
+            DEPLOY_ENV="STAGING"
+          fi
+
+          set_github_env 'DEPLOY_ENV' "${DEPLOY_ENV}" non-optional non-secret verbose
+
       - name: Set Docker Hub registry credentials
         if: env.DHCR_ENABLED == 'true'
         env:
@@ -511,4 +542,115 @@ jobs:
           username: ${{ env.CUSTOM_CR_USERNAME }}
           password: ${{ env.CUSTOM_CR_TOKEN }}
 
-      # FIXME
+      - name: Set Docker image tags
+        env:
+          DEPLOY_ENV: ${{ env.DEPLOY_ENV }}
+          DHCR_ENABLED: ${{ env.DHCR_ENABLED }}
+          DHCR_IMAGES_NAME: ${{ env.DHCR_IMAGES_NAME }}
+          GHCR_ENABLED: ${{ env.GHCR_ENABLED }}
+          GHCR_IMAGES_NAME: ${{ env.GHCR_IMAGES_NAME }}
+          CUSTOM_CR_ENABLED: ${{ env.CUSTOM_CR_ENABLED }}
+          CUSTOM_CR_IMAGES_NAME: ${{ env.CUSTOM_CR_IMAGES_NAME }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          # Set Docker image tags
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_env.sh
+
+          IMAGE_TAGS=''
+
+          # Include image tag for Docker Hub registry
+          if [ "${DHCR_ENABLED}" = "true" ] && [ -n "${DHCR_IMAGES_NAME}" ]; then
+            echo 'Generate Docker Hub image tag (commit SHA)'
+            IMAGE_TAGS="${IMAGE_TAGS},${DHCR_IMAGES_NAME}:${GITHUB_SHA}"
+            if [ "${DEPLOY_ENV}" = "PROD" ]; then
+              echo 'Generate Docker Hub image tag (latest)'
+              IMAGE_TAGS="${IMAGE_TAGS},${DHCR_IMAGES_NAME}:latest"
+            fi
+          fi
+
+          # Include image tag for GitHub registry
+          if [ "${GHCR_ENABLED}" = "true" ] && [ -n "${GHCR_IMAGES_NAME}" ]; then
+            echo 'Generate GitHub registry image tag (commit SHA)'
+            IMAGE_TAGS="${IMAGE_TAGS},${GHCR_IMAGES_NAME}:${GITHUB_SHA}"
+            if [ "${DEPLOY_ENV}" = "PROD" ]; then
+              echo 'Generate GitHub registry image tag (latest)'
+              IMAGE_TAGS="${IMAGE_TAGS},${GHCR_IMAGES_NAME}:latest"
+            fi
+          fi
+
+          # Include image tag for custom registry
+          if [ "${CUSTOM_CR_ENABLED}" = "true" ] && [ -n "${CUSTOM_CR_IMAGES_NAME}" ]; then
+            echo 'Generate custom registry image tag (commit SHA)'
+            IMAGE_TAGS="${IMAGE_TAGS},${CUSTOM_CR_IMAGES_NAME}:${GITHUB_SHA}"
+            if [ "${DEPLOY_ENV}" = "PROD" ]; then
+              echo 'Generate custom registry image tag (latest)'
+              IMAGE_TAGS="${IMAGE_TAGS},${CUSTOM_CR_IMAGES_NAME}:latest"
+            fi
+          fi
+
+          # Remove leading comma
+          IMAGE_TAGS="$(echo "${IMAGE_TAGS}" | sed 's/^,//')"
+
+          if [ -z "${IMAGE_TAGS}" ]; then
+            echo 'Error: No Docker image tags generated.' >&2
+            exit 1
+          fi
+
+          set_github_env 'IMAGE_TAGS' "${IMAGE_TAGS}" non-optional non-secret verbose
+
+      - name: Push Docker image manifest
+        env:
+          PUSH_PLATFORMS: ${{ vars.PUSH_PLATFORMS }}
+          IMAGE_TAGS: ${{ env.IMAGE_TAGS }}
+        run: |
+          # Push Docker image manifest
+          set -euo pipefail
+
+          # Transform list of comma-separated platforms
+          # to a list of platform suffixes (e.g. "amd64", "arm64").
+          PLATFORM_SUFFIXES="$(
+            echo "${PUSH_PLATFORMS:-linux/amd64}" \
+            | jq -Rnrc '
+              input
+              | split("[\\s,]+"; null)
+              | map(gsub("^\\s+|\\s+$"; ""))
+              | map(. | split("/") | last)
+              | map(select(length > 0))
+              | unique
+              | .[]
+            '
+          )"
+
+          # Transform list of comma-separated image tags
+          # to a list of image tags.
+          IMAGE_TAGS_LIST="$(
+            echo "${IMAGE_TAGS}" \
+            | jq -Rnrc '
+              input
+              | split("[\\s,]+"; null)
+              | map(gsub("^\\s+|\\s+$"; ""))
+              | map(select(length > 0))
+              | unique
+              | .[]
+            '
+          )"
+
+          # Iterate over image tags
+          # Create a manifest for each image tag with all platform suffixes.
+          while read -r image_tag; do
+
+            # Build list of this image tag with platform suffixes
+            TARGETS=''
+            while read -r platform_suffix; do
+              TARGETS="${TARGETS} ${image_tag}-${platform_suffix}"
+            done <<< "${PLATFORM_SUFFIXES}"
+
+            # Create manifest for this image tag with all platform suffixes
+            echo "Creating manifest: ${image_tag}"
+            docker buildx imagetools create \
+              -t "${image_tag}" \
+              ${TARGETS}
+
+          done <<< "${IMAGE_TAGS_LIST}"
