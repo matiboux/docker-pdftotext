@@ -65,6 +65,11 @@ jobs:
 
     steps:
 
+      # Initialization steps
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
       # Dependency steps
 
       - name: Install jq
@@ -411,6 +416,14 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v6
+
+      # Dependency steps
+
+      - name: Install jq
+        run: |
+          # apt-get install jq
+          sudo apt-get -q update
+          sudo apt-get -qy install --no-install-recommends jq
 
       # Preparation steps
 
