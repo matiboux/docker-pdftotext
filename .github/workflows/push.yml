@@ -13,6 +13,7 @@ name: Push CD
 # - CUSTOM_CR_USERNAME
 # - CUSTOM_CR_NAMESPACE
 # - IMAGES_PREFIX
+# - PUSH_PLATFORMS
 
 # Helper scripts:
 # - ./.github/workflows/scripts/set_github_env.sh
@@ -51,11 +52,85 @@ env:
 
 jobs:
 
+  # Prepare job
+  prepare:
+    name: Prepare build matrix
+
+    # https://github.com/actions/runner-images/blob/main/images/ubuntu-slim/ubuntu-slim-Readme.md
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+
+      # Initialization steps
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Dependency steps
+
+      - name: Install jq
+        run: |
+          # apt-get install jq
+          sudo apt-get -q update
+          sudo apt-get -qy install --no-install-recommends jq
+
+      # Execution steps
+
+      - name: Build matrix from PUSH_PLATFORMS
+        id: matrix
+        env:
+          PUSH_PLATFORMS: ${{ vars.PUSH_PLATFORMS }}
+        run: |
+          # Build job matrix from PUSH_PLATFORMS variable
+          set -euo pipefail
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_output.sh
+
+          # Transform list of comma-separated platforms
+          # to job matrix configuration in JSON format.
+          MATRIX_JSON="$(
+            echo "${PUSH_PLATFORMS:-linux/amd64}" \
+            | jq -Rn '
+              input
+              | split("[\\s,]+"; null)
+              | map(gsub("^\\s+|\\s+$"; ""))
+              | map(select(length > 0))
+              | map({
+                platform: .,
+                runner: (
+                  if . == "linux/amd64" then "ubuntu-latest"
+                  elif . == "linux/arm64" then "ubuntu-24.04-arm"
+                  else "ubuntu-latest"
+                  end
+                )
+              })
+              | { include: . }
+            '
+          )"
+
+          set_github_output 'matrix' "${MATRIX_JSON}" non-optional verbose
+
   # Build & Push job
   push:
     name: Build & Push
-    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
+    # https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md
+    # https://github.com/actions/partner-runner-images/blob/main/images/arm-ubuntu-24-image.md
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+
+    # Job dependencies
+    needs:
+      - prepare
 
     # Run if push to some registry is enabled
     if: |
@@ -73,6 +148,7 @@ jobs:
       IMAGES_SUFFIX: ''
       SERVICE_DIR: .
       BUILD_CONTEXTS: ''
+      BUILD_PLATFORM: ${{ matrix.platform }}
 
     steps:
 
@@ -80,6 +156,274 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v6
+
+      # Preparation steps
+
+      - name: Set DEPLOY_ENV
+        env:
+          GITHUB_REF: ${{ github.ref }}
+          DEPLOY_ENV: ${{ github.event.inputs.deploy_env }}
+        run: |
+          # Set DEPLOY_ENV environment variable
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_env.sh
+
+          if [ -n "${DEPLOY_ENV}" ]; then
+            # Sanitize DEPLOY_ENV value:
+            # - Strip leading & trailing whitespace
+            # - Remove punctuation
+            # - Convert to uppercase
+            # - Replace spaces with underscores
+            DEPLOY_ENV="$(
+              echo "${DEPLOY_ENV}" \
+              | xargs \
+              | tr -d '[:punct:]' \
+              | tr '[:lower:] ' '[:upper:]_'
+            )"
+          elif [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            DEPLOY_ENV="PROD"
+          else
+            DEPLOY_ENV="STAGING"
+          fi
+
+          set_github_env 'DEPLOY_ENV' "${DEPLOY_ENV}" non-optional non-secret verbose
+
+      - name: Set PLATFORM_SUFFIX
+        env:
+          BUILD_PLATFORM: ${{ env.BUILD_PLATFORM }}
+        run: |
+          # Set PLATFORM_SUFFIX environment variable
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_env.sh
+
+          PLATFORM_SUFFIX="$(echo "${BUILD_PLATFORM}" | cut -d/ -f2)"
+
+          set_github_env 'PLATFORM_SUFFIX' "${PLATFORM_SUFFIX}" non-optional non-secret verbose
+
+      - name: Set Docker Hub registry credentials
+        if: env.DHCR_ENABLED == 'true'
+        env:
+          REGISTRY_URL: docker.io
+          REGISTRY_USERNAME: ${{ vars.DHCR_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.DHCR_TOKEN }}
+          REGISTRY_NAMESPACE: ${{ vars.DHCR_USERNAME }}
+          IMAGES_PREFIX: ${{ env.IMAGES_PREFIX }}
+          IMAGES_SUFFIX: ${{ env.IMAGES_SUFFIX }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          REPOSITORY_PATH: ${{ github.repository }}
+        run: |
+          # Set Docker Hub registry credentials
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_env.sh
+          . ./.github/workflows/scripts/set_registry_credentials.sh
+
+          set_registry_credentials \
+            'DHCR_URL' \
+            'DHCR_IMAGES_NAME' \
+            'DHCR_USERNAME' \
+            'DHCR_TOKEN'
+
+      - name: Set GitHub registry credentials
+        if: env.GHCR_ENABLED == 'true'
+        env:
+          REGISTRY_URL: ghcr.io
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_NAMESPACE: ${{ github.repository_owner }}
+          IMAGES_PREFIX: ${{ env.IMAGES_PREFIX }}
+          IMAGES_SUFFIX: ${{ env.IMAGES_SUFFIX }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          REPOSITORY_PATH: ${{ github.repository }}
+        run: |
+          # Set GitHub registry credentials
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_env.sh
+          . ./.github/workflows/scripts/set_registry_credentials.sh
+
+          set_registry_credentials \
+            'GHCR_URL' \
+            'GHCR_IMAGES_NAME' \
+            'GHCR_USERNAME' \
+            'GHCR_TOKEN'
+
+      - name: Set custom registry credentials
+        if: env.CUSTOM_CR_ENABLED == 'true'
+        env:
+          REGISTRY_URL: ${{ vars.CUSTOM_CR_URL }}
+          REGISTRY_USERNAME: ${{ vars.CUSTOM_CR_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.CUSTOM_CR_TOKEN }}
+          REGISTRY_NAMESPACE: ${{ vars.CUSTOM_CR_NAMESPACE }}
+          IMAGES_PREFIX: ${{ env.IMAGES_PREFIX }}
+          IMAGES_SUFFIX: ${{ env.IMAGES_SUFFIX }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          REPOSITORY_PATH: ${{ github.repository }}
+        run: |
+          # Set custom registry credentials
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_env.sh
+          . ./.github/workflows/scripts/set_registry_credentials.sh
+
+          set_registry_credentials \
+            'CUSTOM_CR_URL' \
+            'CUSTOM_CR_IMAGES_NAME' \
+            'CUSTOM_CR_USERNAME' \
+            'CUSTOM_CR_TOKEN'
+
+      # Execution steps
+
+      - name: Login to Docker Hub registry
+        if: env.DHCR_URL
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.DHCR_URL }}
+          username: ${{ env.DHCR_USERNAME }}
+          password: ${{ env.DHCR_TOKEN }}
+
+      - name: Login to GitHub registry
+        if: env.GHCR_URL
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.GHCR_URL }}
+          username: ${{ env.GHCR_USERNAME }}
+          password: ${{ env.GHCR_TOKEN }}
+
+      - name: Login to custom registry
+        if: env.CUSTOM_CR_URL
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.CUSTOM_CR_URL }}
+          username: ${{ env.CUSTOM_CR_USERNAME }}
+          password: ${{ env.CUSTOM_CR_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Set Docker image tags
+        env:
+          DEPLOY_ENV: ${{ env.DEPLOY_ENV }}
+          DHCR_ENABLED: ${{ env.DHCR_ENABLED }}
+          DHCR_IMAGES_NAME: ${{ env.DHCR_IMAGES_NAME }}
+          GHCR_ENABLED: ${{ env.GHCR_ENABLED }}
+          GHCR_IMAGES_NAME: ${{ env.GHCR_IMAGES_NAME }}
+          CUSTOM_CR_ENABLED: ${{ env.CUSTOM_CR_ENABLED }}
+          CUSTOM_CR_IMAGES_NAME: ${{ env.CUSTOM_CR_IMAGES_NAME }}
+          GITHUB_SHA: ${{ github.sha }}
+          PLATFORM_SUFFIX: ${{ env.PLATFORM_SUFFIX }}
+        run: |
+          # Set Docker image tags
+
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_env.sh
+
+          IMAGE_TAGS=''
+
+          # Include image tag for Docker Hub registry
+          if [ "${DHCR_ENABLED}" = "true" ] && [ -n "${DHCR_IMAGES_NAME}" ]; then
+            echo 'Generate Docker Hub image tag (commit SHA)'
+            IMAGE_TAGS="${IMAGE_TAGS},${DHCR_IMAGES_NAME}:${GITHUB_SHA}-${PLATFORM_SUFFIX}"
+            if [ "${DEPLOY_ENV}" = "PROD" ]; then
+              echo 'Generate Docker Hub image tag (latest)'
+              IMAGE_TAGS="${IMAGE_TAGS},${DHCR_IMAGES_NAME}:latest-${PLATFORM_SUFFIX}"
+            fi
+          fi
+
+          # Include image tag for GitHub registry
+          if [ "${GHCR_ENABLED}" = "true" ] && [ -n "${GHCR_IMAGES_NAME}" ]; then
+            echo 'Generate GitHub registry image tag (commit SHA)'
+            IMAGE_TAGS="${IMAGE_TAGS},${GHCR_IMAGES_NAME}:${GITHUB_SHA}-${PLATFORM_SUFFIX}"
+            if [ "${DEPLOY_ENV}" = "PROD" ]; then
+              echo 'Generate GitHub registry image tag (latest)'
+              IMAGE_TAGS="${IMAGE_TAGS},${GHCR_IMAGES_NAME}:latest-${PLATFORM_SUFFIX}"
+            fi
+          fi
+
+          # Include image tag for custom registry
+          if [ "${CUSTOM_CR_ENABLED}" = "true" ] && [ -n "${CUSTOM_CR_IMAGES_NAME}" ]; then
+            echo 'Generate custom registry image tag (commit SHA)'
+            IMAGE_TAGS="${IMAGE_TAGS},${CUSTOM_CR_IMAGES_NAME}:${GITHUB_SHA}-${PLATFORM_SUFFIX}"
+            if [ "${DEPLOY_ENV}" = "PROD" ]; then
+              echo 'Generate custom registry image tag (latest)'
+              IMAGE_TAGS="${IMAGE_TAGS},${CUSTOM_CR_IMAGES_NAME}:latest-${PLATFORM_SUFFIX}"
+            fi
+          fi
+
+          # Remove leading comma
+          IMAGE_TAGS="$(echo "${IMAGE_TAGS}" | sed 's/^,//')"
+
+          if [ -z "${IMAGE_TAGS}" ]; then
+            echo 'Error: No Docker image tags generated.' >&2
+            exit 1
+          fi
+
+          set_github_env 'IMAGE_TAGS' "${IMAGE_TAGS}" non-optional non-secret verbose
+
+      - name: Build & push Docker image
+        uses: docker/build-push-action@v7
+        env:
+          DOCKER_BUILD_CHECKS_ANNOTATIONS: true
+          DOCKER_BUILD_SUMMARY: true
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          tags: ${{ env.IMAGE_TAGS }}
+          file: ${{ env.SERVICE_DIR }}/Dockerfile
+          context: ${{ env.SERVICE_DIR }}
+          build-contexts: ${{ env.BUILD_CONTEXTS }}
+          target: app_prod
+          build-args: |
+            PORT=8080
+            BUILD_CHECK=false
+          platforms: ${{ matrix.platform }}
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Push manifest job
+  push-manifest:
+    name: Push manifest
+
+    # https://github.com/actions/runner-images/blob/main/images/ubuntu-slim/ubuntu-slim-Readme.md
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+
+    # Job dependencies
+    needs:
+      - push
+
+    # Run if push to some registry is enabled
+    if: |
+      vars.DHCR_ENABLED == 'true' ||
+      vars.GHCR_ENABLED == 'true' ||
+      vars.CUSTOM_CR_ENABLED == 'true'
+
+    # Set GITHUB_TOKEN permissions for the job
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+
+      # Initialization steps
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Dependency steps
+
+      - name: Install jq
+        run: |
+          # apt-get install jq
+          sudo apt-get -q update
+          sudo apt-get -qy install --no-install-recommends jq
 
       # Preparation steps
 
@@ -211,14 +555,6 @@ jobs:
           username: ${{ env.CUSTOM_CR_USERNAME }}
           password: ${{ env.CUSTOM_CR_TOKEN }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
       - name: Set Docker image tags
         env:
           DEPLOY_ENV: ${{ env.DEPLOY_ENV }}
@@ -277,22 +613,57 @@ jobs:
 
           set_github_env 'IMAGE_TAGS' "${IMAGE_TAGS}" non-optional non-secret verbose
 
-      - name: Build & push Docker image
-        uses: docker/build-push-action@v7
+      - name: Push Docker image manifest
         env:
-          DOCKER_BUILD_CHECKS_ANNOTATIONS: true
-          DOCKER_BUILD_SUMMARY: true
-          DOCKER_BUILD_RECORD_UPLOAD: false
-        with:
-          tags: ${{ env.IMAGE_TAGS }}
-          file: ${{ env.SERVICE_DIR }}/Dockerfile
-          context: ${{ env.SERVICE_DIR }}
-          build-contexts: ${{ env.BUILD_CONTEXTS }}
-          target: app_prod
-          build-args: |
-            PORT=8080
-            BUILD_CHECK=false
-          platforms: linux/amd64,linux/arm64
-          push: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          PUSH_PLATFORMS: ${{ vars.PUSH_PLATFORMS }}
+          IMAGE_TAGS: ${{ env.IMAGE_TAGS }}
+        run: |
+          # Push Docker image manifest
+          set -euo pipefail
+
+          # Transform list of comma-separated platforms
+          # to a list of platform suffixes (e.g. "amd64", "arm64").
+          PLATFORM_SUFFIXES="$(
+            echo "${PUSH_PLATFORMS:-linux/amd64}" \
+            | jq -Rnrc '
+              input
+              | split("[\\s,]+"; null)
+              | map(gsub("^\\s+|\\s+$"; ""))
+              | map(. | split("/") | last)
+              | map(select(length > 0))
+              | unique
+              | .[]
+            '
+          )"
+
+          # Transform list of comma-separated image tags
+          # to a list of image tags.
+          IMAGE_TAGS_LIST="$(
+            echo "${IMAGE_TAGS}" \
+            | jq -Rnrc '
+              input
+              | split("[\\s,]+"; null)
+              | map(gsub("^\\s+|\\s+$"; ""))
+              | map(select(length > 0))
+              | unique
+              | .[]
+            '
+          )"
+
+          # Iterate over image tags
+          # Create a manifest for each image tag with all platform suffixes.
+          while read -r image_tag; do
+
+            # Build list of this image tag with platform suffixes
+            TARGETS=''
+            while read -r platform_suffix; do
+              TARGETS="${TARGETS} ${image_tag}-${platform_suffix}"
+            done <<< "${PLATFORM_SUFFIXES}"
+
+            # Create manifest for this image tag with all platform suffixes
+            echo "Creating manifest: ${image_tag}"
+            docker buildx imagetools create \
+              -t "${image_tag}" \
+              ${TARGETS}
+
+          done <<< "${IMAGE_TAGS_LIST}"

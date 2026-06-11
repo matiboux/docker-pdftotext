@@ -14,6 +14,8 @@ set_registry_credentials() {
 	# - IMAGES_PREFIX (optional)
 	#     The prefix to use for image names (e.g., project name)
 	#     (defaults to repository name if not set)
+	# - IMAGES_SUFFIX (optional)
+	#     The suffix to use for image names (e.g., service name)
 	# - REPOSITORY_OWNER (required)
 	#     The owner of the repository (e.g., GitHub repository owner)
 	# - REPOSITORY_PATH (required)
@@ -77,6 +79,11 @@ set_registry_credentials() {
 		IMAGES_PREFIX="$(echo "${REPOSITORY_PATH##*/}" | tr '[:upper:]' '[:lower:]')"
 	fi
 	REGISTRY_IMAGES_PREFIX="${REGISTRY_IMAGES_PREFIX}/${IMAGES_PREFIX}"
+	# Include images suffix
+	if [ -n "${IMAGES_SUFFIX}" ] && [ "${IMAGES_SUFFIX}" != "0" ] && [ "${IMAGES_SUFFIX}" != "NONE" ]; then
+		IMAGES_SUFFIX="$(echo "${IMAGES_SUFFIX}" | tr '[:upper:]' '[:lower:]')"
+		REGISTRY_IMAGES_PREFIX="${REGISTRY_IMAGES_PREFIX}${IMAGES_SUFFIX}"
+	fi
 
 	# Verify REGISTRY_USERNAME variable
 	if [ -z "${REGISTRY_USERNAME}" ]; then
@@ -91,8 +98,8 @@ set_registry_credentials() {
 	fi
 
 	# Set GitHub Actions environment variables
-	set_github_env "${registry_url_env_name}" "${REGISTRY_URL}" 'true'
-	set_github_env "${registry_images_prefix_env_name}" "${REGISTRY_IMAGES_PREFIX}" 'true'
-	set_github_env "${registry_username_env_name}" "${REGISTRY_USERNAME}" 'true'
-	set_github_env "${registry_token_env_name}" "${REGISTRY_TOKEN}" 'true'
+	set_github_env "${registry_url_env_name}" "${REGISTRY_URL}" non-optional secret verbose
+	set_github_env "${registry_images_prefix_env_name}" "${REGISTRY_IMAGES_PREFIX}" non-optional secret verbose
+	set_github_env "${registry_username_env_name}" "${REGISTRY_USERNAME}" non-optional secret verbose
+	set_github_env "${registry_token_env_name}" "${REGISTRY_TOKEN}" non-optional secret verbose
 }
