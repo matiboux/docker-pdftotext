@@ -83,6 +83,9 @@ jobs:
           # Build job matrix from PUSH_PLATFORMS variable
           set -euo pipefail
 
+          # Load helper scripts
+          . ./.github/workflows/scripts/set_github_output.sh
+
           # Transform list of comma-separated platforms
           # to job matrix configuration in JSON format.
           MATRIX_JSON="$(
@@ -105,10 +108,7 @@ jobs:
             '
           )"
 
-          echo "matrix=$MATRIX_JSON" >> "$GITHUB_OUTPUT"
-          echo "matrix<<GITHUB_OUTPUT_EOF" >> "$GITHUB_OUTPUT"
-          echo "${MATRIX_JSON}" >> "$GITHUB_OUTPUT"
-          echo "GITHUB_OUTPUT_EOF" >> "$GITHUB_OUTPUT"
+          set_github_output 'matrix' "${MATRIX_JSON}" non-optional verbose
 
   # Build & Push job
   push:
