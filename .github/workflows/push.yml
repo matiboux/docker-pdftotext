@@ -26,6 +26,7 @@ on:
     branches:
       # Primary branches
       - main # Production
+    pull_request: # TEST
 
   # Run on manual triggers
   workflow_dispatch:
